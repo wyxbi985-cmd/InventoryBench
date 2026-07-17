@@ -20,7 +20,7 @@ from sgira.inventorybench import (  # noqa: E402
     save_fixed_run,
     summarize_runs,
 )
-from sgira.llm import ChatClientAdapter  # noqa: E402
+from sgira.llm import OpenAICompatibleLLM  # noqa: E402
 
 
 def read_instances(path: Path) -> list[Path]:
@@ -37,22 +37,18 @@ def make_llm(model: str, output_dir: Path):
         load_dotenv(ROOT / ".env")
     except ImportError:
         pass
-    from ma_policy.llm_client import LLMClient
-
-    client = LLMClient(
+    return OpenAICompatibleLLM(
         model=model,
-        temperature=0,
         cache_dir=str(output_dir / ".llm_cache"),
         audit_path=str(output_dir / "model_audit.jsonl"),
     )
-    return ChatClientAdapter(client)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--instance-file", type=Path,
-        default=ROOT / "ma_policy" / "smoke_set_12.txt",
+        default=ROOT / "sgira" / "smoke_set_12.txt",
     )
     parser.add_argument(
         "--routes", nargs="+", choices=[route.value for route in Route],

@@ -69,7 +69,7 @@ Run the four fixed methods on the frozen 12-instance smoke set:
 
 ```bash
 python scripts/run_sgira_fixed.py \
-  --instance-file ma_policy/smoke_set_12.txt \
+  --instance-file sgira/smoke_set_12.txt \
   --routes OR LLM OR_TO_LLM LLM_TO_OR \
   --output-dir sgira_runs/fixed_gemini_smoke \
   --model gemini-3-flash-preview
@@ -79,11 +79,26 @@ Run Rule-Router and SGIRA on the same set:
 
 ```bash
 python scripts/run_sgira_dynamic.py \
-  --instance-file ma_policy/smoke_set_12.txt \
+  --instance-file sgira/smoke_set_12.txt \
   --methods RULE_ROUTER SGIRA \
   --output-dir sgira_runs/dynamic_gemini_smoke \
   --model gemini-3-flash-preview
 ```
 
-Both model-backed commands make real API calls. Configure the existing
-`MA_LLM_BASE_URL`, `MA_LLM_API_KEY`, and model environment variables first.
+Both model-backed commands make real API calls through an OpenAI-compatible
+endpoint. Create a local `.env` (never commit it) with:
+
+```dotenv
+MA_LLM_BASE_URL=https://company-gateway.example/v1
+MA_LLM_API_KEY=replace-with-your-company-key
+MA_LLM_MODEL=gemini-3-flash-preview
+MA_MODEL_GEMINI3_FLASH=gemini-3-flash-preview
+MA_LLM_JSON_MODE=true
+MA_LLM_TRUST_ENV=true
+```
+
+The exact URL and model identifier are gateway-specific. If the endpoint does
+not implement OpenAI JSON mode, set `MA_LLM_JSON_MODE=false`; SGIRA still
+extracts and validates the returned JSON object.
+Set `MA_LLM_TRUST_ENV=false` only when inherited proxy variables should be
+ignored (for example, an unavailable local SOCKS proxy on a remote machine).
