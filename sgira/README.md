@@ -82,8 +82,15 @@ python scripts/run_sgira_dynamic.py \
   --instance-file sgira/smoke_set_12.txt \
   --methods RULE_ROUTER SGIRA \
   --output-dir sgira_runs/dynamic_gemini_smoke \
-  --model gemini-3-flash-preview
+  --model gemini-3-flash-preview \
+  --resume
 ```
+
+Each completed period is appended to `decision_log.jsonl`, and model responses
+are cached on disk. If the process is interrupted, rerun the exact same command
+with `--resume`: saved orders are replayed locally, controller memory is
+restored, and API calls continue from the first unfinished period. Omitting
+`--resume` intentionally starts a fresh run and clears the old decision log.
 
 Both model-backed commands make real API calls through an OpenAI-compatible
 endpoint. Create a local `.env` (never commit it) with:

@@ -56,6 +56,11 @@ def controller_config(ablation: str) -> ControllerConfig:
 
 
 def main() -> None:
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(ROOT / ".env")
+    except ImportError:
+        pass
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--instance-file", type=Path,
@@ -78,6 +83,10 @@ def main() -> None:
             "MA_MODEL_GEMINI3_FLASH", "gemini-3-flash-preview"
         )
     )
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="Replay completed periods from decision logs and continue safely.",
+    )
     args = parser.parse_args()
     if not args.instance_file.is_absolute():
         args.instance_file = ROOT / args.instance_file
@@ -98,6 +107,12 @@ def main() -> None:
                 llm=llm,
                 controller_config=controller_config(args.ablation),
                 decision_log=target / "decision_log.jsonl",
+                resume=args.resume,
+                progress=lambda period, horizon, replayed: print(
+                    f"  period {period}/{horizon} "
+                    f"({'replayed' if replayed else 'saved'})",
+                    flush=True,
+                ),
             )
             save_routed_run(run, target)
             runs.append(run)
@@ -125,6 +140,7 @@ def main() -> None:
             "model": args.model,
             "methods": args.methods,
             "ablation": args.ablation,
+            "resume": args.resume,
             "instance_file": str(args.instance_file),
         }, ensure_ascii=False, indent=2, sort_keys=True),
         encoding="utf-8",

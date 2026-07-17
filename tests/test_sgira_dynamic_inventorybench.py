@@ -115,6 +115,46 @@ class DynamicInventoryBenchTests(unittest.TestCase):
             self.assertNotIn("arrival_period", serialized)
             self.assertNotIn("is_lost", serialized)
 
+    def test_resume_replays_saved_periods_without_repeating_model_calls(self) -> None:
+        instance = load_inventorybench_instance(INSTANCE)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            complete_log = root / "complete.jsonl"
+            baseline = run_routed_instance(
+                instance, "SGIRA", llm=CyclingFakeLLM(), decision_log=complete_log
+            )
+            complete_lines = complete_log.read_text(encoding="utf-8").splitlines()
+            interrupted_log = root / "interrupted.jsonl"
+            interrupted_log.write_text(
+                "\n".join(complete_lines[:7]) + "\n", encoding="utf-8"
+            )
+
+            resumed_llm = CyclingFakeLLM()
+            resumed = run_routed_instance(
+                instance,
+                "SGIRA",
+                llm=resumed_llm,
+                decision_log=interrupted_log,
+                resume=True,
+            )
+
+            self.assertEqual(resumed.periods, baseline.periods)
+            self.assertEqual(resumed.metrics, baseline.metrics)
+            self.assertEqual(
+                [row.execution.order_quantity for row in resumed.decisions],
+                [row.execution.order_quantity for row in baseline.decisions],
+            )
+            self.assertEqual(
+                len(interrupted_log.read_text(encoding="utf-8").splitlines()),
+                len(instance.demands),
+            )
+            controller_calls = [
+                call for call in resumed_llm.calls if call["role"] == "controller"
+            ]
+            self.assertEqual(
+                controller_calls[0]["payload"]["observable_state"]["period"], 8
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

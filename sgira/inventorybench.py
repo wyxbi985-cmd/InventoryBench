@@ -6,18 +6,19 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from statistics import mean, pstdev
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import numpy as np
 import pandas as pd
 
 from .decision_logger import DecisionLogger
-from .controller import ControllerConfig, GeminiController
+from .controller import ControllerConfig, GeminiController, MemoryItem, RoutingRecord
 from .dynamic_policy import DynamicDecision, RuleRoutingPolicy, SGIRAPolicy
 from .environment import InventoryEnv, PeriodResult
 from .executors import ExecutionRecord, FixedRouteExecutors, Route
+from .features import StateFeatures
 from .llm import StructuredLLM
-from .or_policy import ORPolicy, ORPolicyConfig
+from .or_policy import ORDecision, ORPolicy, ORPolicyConfig
 
 
 @dataclass(frozen=True)
@@ -175,6 +176,52 @@ def _environment(instance: InventoryBenchInstance) -> InventoryEnv:
     )
 
 
+def _restore_dynamic_decision(data: Mapping[str, Any]) -> DynamicDecision:
+    """Rebuild one logged decision so an interrupted run can be replayed."""
+    routing_data = dict(data["routing"])
+    routing_data["selected_route"] = Route(routing_data["selected_route"])
+    routing_data["reason_codes"] = tuple(routing_data.get("reason_codes", ()))
+    routing_data["active_memory"] = tuple(
+        MemoryItem(**item) for item in routing_data.get("active_memory", ())
+    )
+    execution_data = dict(data["execution"])
+    execution_data["corrections"] = tuple(execution_data.get("corrections", ()))
+    execution_data["or_decision"] = ORDecision(**execution_data["or_decision"])
+    return DynamicDecision(
+        features=StateFeatures(**data["features"]),
+        routing=RoutingRecord(**routing_data),
+        execution=ExecutionRecord(**execution_data),
+        total_llm_calls=int(data["total_llm_calls"]),
+    )
+
+
+def _load_resume_rows(path: Path, horizon: int) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line_number, line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), 1
+    ):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"invalid resume log at {path}:{line_number}: {exc}"
+            ) from exc
+        expected_period = len(rows) + 1
+        if row.get("period") != expected_period:
+            raise ValueError(
+                f"resume log period mismatch: expected {expected_period}, "
+                f"found {row.get('period')}"
+            )
+        rows.append(row)
+    if len(rows) > horizon:
+        raise ValueError("resume log contains more periods than the instance horizon")
+    return rows
+
+
 def run_fixed_instance(
     instance: InventoryBenchInstance,
     route: Route | str,
@@ -213,6 +260,8 @@ def run_routed_instance(
     llm: StructuredLLM,
     controller_config: ControllerConfig | None = None,
     decision_log: str | Path | None = None,
+    resume: bool = False,
+    progress: Callable[[int, int, bool], None] | None = None,
 ) -> RoutedRunResult:
     method = method.upper()
     if method not in {"RULE_ROUTER", "SGIRA"}:
@@ -231,7 +280,28 @@ def run_routed_instance(
     log_path = Path(decision_log) if decision_log else None
     if log_path:
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        if not resume:
+            log_path.write_text("", encoding="utf-8")
     decisions: list[DynamicDecision] = []
+
+    resume_rows = _load_resume_rows(log_path, env.horizon) if log_path and resume else []
+    for row in resume_rows:
+        decision = _restore_dynamic_decision(row)
+        observation = env.observe()
+        if observation.period != row["period"]:
+            raise ValueError("resume replay is not aligned with the environment")
+        decisions.append(decision)
+        env.step(decision.execution.order_quantity)
+        if (
+            method == "SGIRA"
+            and decision.routing.source == "gemini"
+            and policy.controller.config.include_memory
+        ):
+            memory_update = decision.routing.parsed_output.get("memory_update", "")
+            policy.controller.memory.update(str(memory_update), observation.period)
+        if progress:
+            progress(observation.period, env.horizon, True)
+
     while not env.done:
         observation = env.observe()
         decision = policy.decide(observation)
@@ -244,6 +314,8 @@ def run_routed_instance(
                     sort_keys=True,
                 ) + "\n")
         env.step(decision.execution.order_quantity)
+        if progress:
+            progress(observation.period, env.horizon, False)
 
     metrics = compute_metrics(env.results, instance.profit_per_unit)
     selected = [decision.routing.selected_route.value for decision in decisions]
